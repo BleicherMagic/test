@@ -16,10 +16,6 @@ from contextlib import contextmanager
 # DB CONNECTION & INIT
 # ==========================
 
-import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import streamlit as st
 
 @st.cache_resource
 def init_connection_pool() -> SimpleConnectionPool:
