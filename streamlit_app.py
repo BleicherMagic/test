@@ -46,6 +46,16 @@ import streamlit as st
 # FAKE CONFIG/DATA EXAMPLES
 # ==========================
 
+st.markdown("""
+<style>
+input {
+  unicode-bidi: bidi-override;
+  direction: RTL;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
 # פקולטות רלוונטיות + הגדרות אימות (שדות לטבלאות, מייל יעד, שנות תוקף)
 FACULTIES = [
     {
