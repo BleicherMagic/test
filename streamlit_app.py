@@ -203,6 +203,22 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
 
 st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
 
+
+st.markdown("""
+<style>
+body, html {
+    direction: RTL;
+    unicode-bidi: bidi-override;
+    text-align: right;
+}
+p, div, input, label, h1, h2, h3, h4, h5, h6 {
+    direction: RTL;
+    unicode-bidi: bidi-override;
+    text-align: right;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🧪 מערכת אישור קורסי ליבה – MVP")
 
 with st.expander("אודות המערכת (MVP)", expanded=False):
