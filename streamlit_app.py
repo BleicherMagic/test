@@ -1,6 +1,8 @@
 # app.py
 import pandas as pd
 import streamlit as st
+st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
+
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from typing import List, Dict, Any
@@ -14,7 +16,6 @@ from utils.rtl import inject_rtl_css
 from utils.export import export_faculty_packages
 
 # MUST be first Streamlit call:
-st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
 
 inject_rtl_css()
 
