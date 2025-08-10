@@ -207,13 +207,18 @@ st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_ico
 
 st.markdown("""
 <style>
-input {
-  unicode-bidi: bidi-override;
-  direction: RTL;
+body, html {
+    direction: RTL;
+    unicode-bidi: bidi-override;
+    text-align: right;
+}
+p, div, input, label, h1, h2, h3, h4, h5, h6 {
+    direction: RTL;
+    unicode-bidi: bidi-override;
+    text-align: right;
 }
 </style>
 """, unsafe_allow_html=True)
-
 
 st.title("🧪 מערכת אישור קורסי ליבה – MVP")
 
