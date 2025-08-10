@@ -108,11 +108,14 @@ CORE_AREAS = [
 # במציאות ה-"file_url" יהיה קישור לקובץ סילבוס (PDF) המאוחסן ב‑Cloud (או קובץ שהועלה).
 SYLLABI_INDEX = pd.DataFrame([
     {"institution": "מכללת הדסה", "year": 2022, "course_code": "HAD-CH101",
-     "course_name": "כימיה כללית א'", "core_area": "כימיה כללית", "file_url": "https://example.com/had/2022/chem101.pdf"},
+     "course_name": "כימיה כללית א'", "core_area": "כימיה כללית",
+     "file_url": "https://example.com/had/2022/chem101.pdf"},
     {"institution": "מכללת הדסה", "year": 2022, "course_code": "HAD-CH202",
-     "course_name": "כימיה אורגנית", "core_area": "כימיה אורגנית", "file_url": "https://example.com/had/2022/orgchem.pdf"},
+     "course_name": "כימיה אורגנית", "core_area": "כימיה אורגנית",
+     "file_url": "https://example.com/had/2022/orgchem.pdf"},
     {"institution": "מכינת אונ' אריאל", "year": 2021, "course_code": "ARL-BIO110",
-     "course_name": "ביולוגיה של התא", "core_area": "ביולוגיה של התא", "file_url": "https://example.com/ariel/2021/cellbio.pdf"},
+     "course_name": "ביולוגיה של התא", "core_area": "ביולוגיה של התא",
+     "file_url": "https://example.com/ariel/2021/cellbio.pdf"},
     {"institution": "מכינת אונ' בר‑אילן", "year": 2019, "course_code": "BIU-PHY070",
      "course_name": "פיזיקה למכינה", "core_area": "פיזיקה", "file_url": "https://example.com/biu/2019/physics.pdf"},
 ])
@@ -120,6 +123,7 @@ SYLLABI_INDEX = pd.DataFrame([
 # שמירה אנונימית בזמן ריצה לסטטיסטיקות (בדפדפן/Session בלבד במודל הדגמה)
 if "STATS" not in st.session_state:
     st.session_state["STATS"] = []  # כל רשומה: {institution, year, core_area}
+
 
 # ==========================
 # Utilities
@@ -150,7 +154,8 @@ def make_faculty_table_rows(applicant, selections: List[Dict[str, Any]]):
     return rows
 
 
-def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_faculties: List[str], uploaded_files: Dict[str, bytes]):
+def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_faculties: List[str],
+                            uploaded_files: Dict[str, bytes]):
     """יוצר ZIP אחד שמכיל לכל פקולטה: טבלת XLSX + תיקיית סילבוסים + גיליונות ציונים (אם הועלו)."""
     mem_zip = io.BytesIO()
     with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -172,7 +177,8 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
             for i, sel in enumerate(selections, start=1):
                 if sel.get("uploaded_file_key") and sel["uploaded_file_key"] in uploaded_files:
                     # נשמור את הקובץ שהועלה בשם עקבי
-                    zf.writestr(f"{fid}/syllabi/{i:02d}_{sel['course_name']}.pdf", uploaded_files[sel["uploaded_file_key"]])
+                    zf.writestr(f"{fid}/syllabi/{i:02d}_{sel['course_name']}.pdf",
+                                uploaded_files[sel["uploaded_file_key"]])
                 elif sel.get("file_url"):
                     link_list.append(f"- {sel['course_name']}: {sel['file_url']}")
             if link_list:
@@ -185,11 +191,11 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
             # 4) טיוטת מייל
             email_body = (
                 f"אל: {faculty['email']}\n"
-                f"נושא: אימות קורסי ליבה – {applicant.get('full_name','')}\n\n"
+                f"נושא: אימות קורסי ליבה – {applicant.get('full_name', '')}\n\n"
                 f"שלום,\n\nמצורפת טבלת קורסי ליבה בתבנית המבוקשת + סילבוסים וגיליון ציונים (אם קיים).\n"
-                f"שם: {applicant.get('full_name','')} | ת.ז/דרכון: {applicant.get('id_or_passport','')}\n"
-                f"טלפון ליצירת קשר: {applicant.get('phone','')} | דוא""ל: {applicant.get('email','')}\n\n"
-                f"בברכה,\n{applicant.get('full_name','')}\n"
+                f"שם: {applicant.get('full_name', '')} | ת.ז/דרכון: {applicant.get('id_or_passport', '')}\n"
+                f"טלפון ליצירת קשר: {applicant.get('phone', '')} | דוא""ל: {applicant.get('email','')}\n\n"
+                f"בברכה,\n{applicant.get('full_name', '')}\n"
             )
             zf.writestr(f"{fid}/email_draft_{fid}.txt", email_body)
 
@@ -203,7 +209,6 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
 
 st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
 
-
 st.markdown("""
 <style>
 body, html {
@@ -215,6 +220,23 @@ p, div, input, label, h1, h2, h3, h4, h5, h6 {
     direction: RTL;
     unicode-bidi: bidi-override;
     text-align: right;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<style>
+div[data-baseweb="select"] {
+    direction: RTL;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<style>
+input {
+  unicode-bidi: bidi-override;
+  direction: RTL;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -343,7 +365,7 @@ st.divider()
 
 # שלב 3 – העלאת גיליונות ציונים (אופציונלי)
 st.header("שלב 3 – הוספת גיליון ציונים (אופציונלי)")
-transcript = st.file_uploader("העלאת קובץ PDF של גיליון ציונים", type=["pdf"]) 
+transcript = st.file_uploader("העלאת קובץ PDF של גיליון ציונים", type=["pdf"])
 if transcript is not None:
     uploaded_files_store["transcript_pdf"] = transcript.getvalue()
 
@@ -383,11 +405,11 @@ st.divider()
 st.header("שלב 5 – סקירה ויצוא חבילות")
 
 ready_to_export = (
-    bool(applicant.get("full_name")) and
-    bool(applicant.get("id_or_passport")) and
-    bool(applicant.get("email")) and
-    selections and
-    chosen_faculties
+        bool(applicant.get("full_name")) and
+        bool(applicant.get("id_or_passport")) and
+        bool(applicant.get("email")) and
+        selections and
+        chosen_faculties
 )
 
 if ready_to_export:
@@ -422,4 +444,5 @@ if st.session_state["STATS"]:
 else:
     st.write("טרם נאספו נתונים להצגה.")
 
-st.caption("\nMVP זה נועד להדגים את הזרימה מקצה לקצה. בשלב הבא נוסיף DB מתמשך, ניהול אדמין לאינדקס סילבוסים, ושליחה ישירה מהדוא\"ל הפרטי של המועמד/ת (OAuth).")
+st.caption(
+    "\nMVP זה נועד להדגים את הזרימה מקצה לקצה. בשלב הבא נוסיף DB מתמשך, ניהול אדמין לאינדקס סילבוסים, ושליחה ישירה מהדוא\"ל הפרטי של המועמד/ת (OAuth).")
