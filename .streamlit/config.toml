@@ -1,0 +1,7 @@
+[theme]
+base = "dark"
+primaryColor = "#8ab4f8"            # links / accents
+backgroundColor = "#0f1115"         # page bg
+secondaryBackgroundColor = "#1b1f2a" # cards/sidebar/expanders
+textColor = "#e6edf3"               # main text
+font = "sans serif"
