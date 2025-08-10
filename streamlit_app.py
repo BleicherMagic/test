@@ -19,16 +19,52 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import streamlit as st
 
-def get_conn():
-    # 1) Try Streamlit secrets
+@st.cache_resource
+def init_connection_pool() -> SimpleConnectionPool:
+    # Prefer Streamlit secrets, else env var
     if "database_url" in st.secrets:
         db_url = st.secrets["database_url"]
-    # 2) Fallback to env var
     else:
         db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
 
-    return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+    # Most managed Postgres providers (Neon/Supabase) require SSL
+    # SimpleConnectionPool forwards kwargs to psycopg2.connect
+    return SimpleConnectionPool(
+        minconn=1,
+        maxconn=6,
+        dsn=db_url,
+        sslmode="require",
+        cursor_factory=RealDictCursor,
+    )
 
+_pool = init_connection_pool()
+
+@contextmanager
+def pooled_cursor(commit: bool = True):
+    """
+    Usage:
+        with pooled_cursor() as cur:
+            cur.execute("...")
+            rows = cur.fetchall()
+    Automatically commits on success (unless commit=False) and returns
+    the connection to the pool.
+    """
+    conn = _pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            yield cur
+            if commit:
+                conn.commit()
+    except Exception:
+        # If something goes wrong, rollback this connection to keep it clean
+        conn.rollback()
+        raise
+    finally:
+        _pool.putconn(conn)
+
+# ==========================
+# DB INIT & SEED
+# ==========================
 
 def init_db():
     ddl = """
@@ -69,12 +105,11 @@ def init_db():
         created_at TIMESTAMPTZ DEFAULT NOW()
     );
     """
-    with get_conn() as conn, conn.cursor() as cur:
+    with pooled_cursor() as cur:
         cur.execute(ddl)
-        conn.commit()
 
 def seed_if_empty():
-    with get_conn() as conn, conn.cursor() as cur:
+    with pooled_cursor() as cur:
         # faculties
         cur.execute("SELECT COUNT(*) AS c FROM faculties;")
         if cur.fetchone()["c"] == 0:
@@ -85,7 +120,6 @@ def seed_if_empty():
                 ('tau',  'אוניברסיטת תל-אביב – הפקולטה לרפואה', 'corecourses@tau.ac.il', 10);
             """)
 
-            # faculty_table_fields
             fields = [
                 # HUJI
                 ("huji","applicant_full_name","שם מלא",1),
@@ -141,19 +175,12 @@ def seed_if_empty():
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, syllabi_rows)
 
-        conn.commit()
-
 # ==========================
-# FETCHERS
+# FETCHERS (using pool)
 # ==========================
 
 def fetch_faculties() -> Tuple[list, dict]:
-    """
-    מחזיר:
-      - faculties: רשימת פקולטות [{id,name,email,max_course_age_years,table_fields:[{id,label},...]}]
-      - FACULTY_LOOKUP: מילון לפי id
-    """
-    with get_conn() as conn, conn.cursor() as cur:
+    with pooled_cursor(commit=False) as cur:
         cur.execute("SELECT * FROM faculties ORDER BY id;")
         facs = cur.fetchall()
 
@@ -164,7 +191,6 @@ def fetch_faculties() -> Tuple[list, dict]:
         """)
         fields = cur.fetchall()
 
-    # קיבוץ השדות לכל פקולטה
     fields_by_fac = {}
     for f in fields:
         fields_by_fac.setdefault(f["faculty_id"], []).append({"id": f["field_id"], "label": f["label"]})
@@ -182,12 +208,12 @@ def fetch_faculties() -> Tuple[list, dict]:
     return faculties, lookup
 
 def fetch_core_areas() -> list:
-    with get_conn() as conn, conn.cursor() as cur:
+    with pooled_cursor(commit=False) as cur:
         cur.execute("SELECT name FROM core_areas ORDER BY name;")
         return [r["name"] for r in cur.fetchall()]
 
 def fetch_syllabi_df() -> pd.DataFrame:
-    with get_conn() as conn, conn.cursor() as cur:
+    with pooled_cursor(commit=False) as cur:
         cur.execute("""
             SELECT id, institution, year, course_code, course_name, core_area, file_url
             FROM syllabi
@@ -199,15 +225,14 @@ def fetch_syllabi_df() -> pd.DataFrame:
 def insert_stat_rows(rows: list):
     if not rows:
         return
-    with get_conn() as conn, conn.cursor() as cur:
+    with pooled_cursor() as cur:
         cur.executemany("""
             INSERT INTO stats (institution, year, core_area)
             VALUES (%s, %s, %s)
         """, rows)
-        conn.commit()
 
 def fetch_stats_agg_df() -> pd.DataFrame:
-    with get_conn() as conn, conn.cursor() as cur:
+    with pooled_cursor(commit=False) as cur:
         cur.execute("""
             SELECT institution, year, core_area, COUNT(*) AS count
             FROM stats
