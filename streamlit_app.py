@@ -46,8 +46,6 @@ import streamlit as st
 # FAKE CONFIG/DATA EXAMPLES
 # ==========================
 
-
-
 # פקולטות רלוונטיות + הגדרות אימות (שדות לטבלאות, מייל יעד, שנות תוקף)
 FACULTIES = [
     {
@@ -205,11 +203,6 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
 
 st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
 
-st.markdown("""
-@@ -220,12 +15,12 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
-</style>
-""", unsafe_allow_html=True)
-
 st.title("🧪 מערכת אישור קורסי ליבה – MVP")
 
 with st.expander("אודות המערכת (MVP)", expanded=False):
@@ -219,7 +212,10 @@ with st.expander("אודות המערכת (MVP)", expanded=False):
 
         **פרטיות**: איסוף הנתונים האישיים הוא לצורך יצוא הטפסים בלבד. הסטטיסטיקות בתחתית אנונימיות.
         """
-@@ -236,55 +31,17 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
+    )
+
+# שלב 1 – מידע אישי כללי
+st.header("שלב 1 – מידע אישי כללי")
 col1, col2, col3 = st.columns(3)
 with col1:
     full_name = st.text_input("שם מלא")
@@ -275,7 +271,8 @@ st.markdown("**או הוספה ידנית של סילבוס/ים ממוסדות 
 with st.popover("הוספת סילבוס ידני"):
     colu1, colu2 = st.columns(2)
     with colu1:
-@@ -293,134 +50,13 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
+        u_institution = st.text_input("מוסד")
+        u_course_name = st.text_input("שם הקורס")
         u_core_area = st.selectbox("תחום ליבה", CORE_AREAS)
     with colu2:
         u_year = st.number_input("שנת לימוד", min_value=2000, max_value=datetime.now().year, value=datetime.now().year)
@@ -376,7 +373,6 @@ ready_to_export = (
     selections and
     chosen_faculties
 )
-
 
 if ready_to_export:
     if st.button("יצירת ZIP לכל הפקולטות שנבחרו"):
