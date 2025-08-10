@@ -3,7 +3,7 @@ import os
 import zipfile
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -13,9 +13,8 @@ from psycopg2.pool import SimpleConnectionPool
 from contextlib import contextmanager
 
 # ==========================
-# DB CONNECTION & INIT
+# DB CONNECTION & POOL
 # ==========================
-
 
 @st.cache_resource
 def init_connection_pool() -> SimpleConnectionPool:
@@ -25,14 +24,18 @@ def init_connection_pool() -> SimpleConnectionPool:
     else:
         db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
 
-    # Most managed Postgres providers (Neon/Supabase) require SSL
-    # SimpleConnectionPool forwards kwargs to psycopg2.connect
+    # Most managed Postgres providers (Neon/Supabase) require SSL.
+    # Add TCP keepalives to avoid idle disconnects on serverless.
     return SimpleConnectionPool(
         minconn=1,
         maxconn=6,
         dsn=db_url,
         sslmode="require",
         cursor_factory=RealDictCursor,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
     )
 
 _pool = init_connection_pool()
@@ -44,8 +47,8 @@ def pooled_cursor(commit: bool = True):
         with pooled_cursor() as cur:
             cur.execute("...")
             rows = cur.fetchall()
-    Automatically commits on success (unless commit=False) and returns
-    the connection to the pool.
+    Auto-commit on success (unless commit=False), rollback on error,
+    and always return the connection to the pool.
     """
     conn = _pool.getconn()
     try:
@@ -54,7 +57,6 @@ def pooled_cursor(commit: bool = True):
             if commit:
                 conn.commit()
     except Exception:
-        # If something goes wrong, rollback this connection to keep it clean
         conn.rollback()
         raise
     finally:
@@ -119,7 +121,6 @@ def seed_if_empty():
             """)
 
             fields = [
-                # HUJI
                 ("huji","applicant_full_name","שם מלא",1),
                 ("huji","id_or_passport","ת.ז/דרכון",2),
                 ("huji","institution","מוסד לימוד",3),
@@ -127,7 +128,6 @@ def seed_if_empty():
                 ("huji","course_name","שם הקורס",5),
                 ("huji","core_area","תחום ליבה",6),
                 ("huji","grade","ציון",7),
-                # BGU
                 ("bgu","applicant_full_name","שם מלא",1),
                 ("bgu","id_or_passport","ת.ז/דרכון",2),
                 ("bgu","institution","מוסד לימוד",3),
@@ -136,7 +136,6 @@ def seed_if_empty():
                 ("bgu","course_name","שם הקורס",6),
                 ("bgu","core_area","תחום ליבה",7),
                 ("bgu","grade","ציון",8),
-                # TAU
                 ("tau","applicant_full_name","שם מלא",1),
                 ("tau","id_or_passport","ת.ז/דרכון",2),
                 ("tau","institution","מוסד לימוד",3),
@@ -181,7 +180,6 @@ def fetch_faculties() -> Tuple[list, dict]:
     with pooled_cursor(commit=False) as cur:
         cur.execute("SELECT * FROM faculties ORDER BY id;")
         facs = cur.fetchall()
-
         cur.execute("""
             SELECT faculty_id, field_id, label, position
             FROM faculty_table_fields
@@ -189,11 +187,11 @@ def fetch_faculties() -> Tuple[list, dict]:
         """)
         fields = cur.fetchall()
 
-    fields_by_fac = {}
+    fields_by_fac: Dict[str, List[Dict[str, str]]] = {}
     for f in fields:
         fields_by_fac.setdefault(f["faculty_id"], []).append({"id": f["field_id"], "label": f["label"]})
 
-    faculties = []
+    faculties: List[Dict[str, Any]] = []
     for f in facs:
         faculties.append({
             "id": f["id"],
@@ -245,14 +243,12 @@ def fetch_stats_agg_df() -> pd.DataFrame:
 # ==========================
 
 def course_is_fresh(year: int, faculty_id: str, FACULTY_LOOKUP: dict) -> bool:
-    """בודק תוקף קורס לפי שנת לימוד והכלל של הפקולטה."""
     faculty = FACULTY_LOOKUP[faculty_id]
     max_age = faculty["max_course_age_years"]
     cutoff_year = (datetime.now() - relativedelta(years=max_age)).year
     return year >= cutoff_year
 
 def make_faculty_table_rows(applicant, selections: List[Dict[str, Any]]):
-    """מכין רשומות לטבלת ה-XLSX לפי הפקולטה."""
     rows = []
     for s in selections:
         rows.append({
@@ -269,12 +265,11 @@ def make_faculty_table_rows(applicant, selections: List[Dict[str, Any]]):
 
 def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_faculties: List[str],
                             uploaded_files: Dict[str, bytes], FACULTY_LOOKUP: dict):
-    """יוצר ZIP אחד שמכיל לכל פקולטה: טבלת XLSX + תיקיית סילבוסים + גיליונות ציונים (אם הועלו)."""
     mem_zip = io.BytesIO()
     with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for fid in chosen_faculties:
             faculty = FACULTY_LOOKUP[fid]
-            # 1) טבלת XLSX – כותרות בעברית
+            # 1) XLSX – כותרות בעברית
             rows = make_faculty_table_rows(applicant, selections)
             df = pd.DataFrame(rows)
             cols_order = [fld["id"] for fld in faculty["table_fields"] if fld["id"] in df.columns]
@@ -323,7 +318,7 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
 
 st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
 
-# RTL מינימלי לכל האפליקציה + יישור טבלאות, בלי להפוך אנגלית/מספרים
+# RTL + safe bidi
 st.markdown("""
 <style>
 html, body, [data-testid="stAppViewContainer"], .block-container { direction: rtl; text-align: right; }
@@ -355,13 +350,10 @@ CORE_AREAS = fetch_core_areas()
 SYLLABI_INDEX = fetch_syllabi_df()
 
 with st.expander("אודות המערכת (MVP)", expanded=False):
-    st.markdown(
-        """
-        מטרת הכלי: לאסוף בקלות את נתוני המועמד/ת, לבחור סילבוסים לקורסי הליבה, למפות אותם לדרישות, לבצע בדיקת תוקף, ולהפיק חבילות הגשה לכל פקולטה (XLSX + קבצים נלווים + טיוטת מייל).
-
-        **פרטיות**: איסוף הנתונים האישיים הוא לצורך יצוא הטפסים בלבד. הסטטיסטיקות בתחתית אנונימיות.
-        """
-    )
+    st.markdown("""
+    מטרת הכלי: לאסוף בקלות את נתוני המועמד/ת, לבחור סילבוסים לקורסי הליבה, למפות אותם לדרישות, לבצע בדיקת תוקף, ולהפיק חבילות הגשה לכל פקולטה (XLSX + קבצים נלווים + טיוטת מייל).
+    **פרטיות**: איסוף הנתונים האישיים הוא לצורך יצוא הטפסים בלבד. הסטטיסטיקות בתחתית אנונימיות.
+    """)
 
 # שלב 1 – מידע אישי כללי
 st.header("שלב 1 – מידע אישי כללי")
@@ -389,10 +381,8 @@ st.header("שלב 2 – בחירת קורסי ליבה והוספת סילבוס
 
 institutions = sorted(SYLLABI_INDEX["institution"].unique()) if not SYLLABI_INDEX.empty else []
 inst = st.selectbox("בחר/י מוסד", options=["—"] + institutions)
-year_sel = None
-selected_rows = []
-user_added_items = []  # העלאות ידניות
-
+selected_rows: List[Dict[str, Any]] = []
+user_added_items: List[Dict[str, Any]] = []  # העלאות ידניות
 uploaded_files_store: Dict[str, bytes] = {}
 
 if inst != "—":
@@ -401,17 +391,16 @@ if inst != "—":
     inst_df = SYLLABI_INDEX[(SYLLABI_INDEX["institution"] == inst) & (SYLLABI_INDEX["year"] == year_sel)]
 
     st.subheader("סילבוסים זמינים מהמוסד והשנה שנבחרו")
-    st.dataframe(inst_df.drop(columns=["id"]), use_container_width=True)
+    st.dataframe(inst_df.drop(columns=["id"], errors="ignore"), use_container_width=True)
 
     choose = st.multiselect(
         "בחר/י קורסים להוספה",
         options=inst_df.index.tolist(),
         format_func=lambda idx: f"{inst_df.loc[idx, 'course_name']} ({inst_df.loc[idx, 'core_area']})",
     )
-
     for idx in choose:
         row = inst_df.loc[idx].to_dict()
-        row.update({"grade": ""})  # ברירת מחדל: ללא ציון
+        row.update({"grade": ""})
         selected_rows.append(row)
 
 st.markdown("**או הוספה ידנית של סילבוס/ים ממוסדות אחרים**")
@@ -434,7 +423,6 @@ with st.popover("הוספת סילבוס ידני"):
             "course_name": (u_course_name or "").strip(),
             "core_area": u_core_area,
             "grade": (u_grade or "").strip(),
-            # הערה: קבצים נשמרים זמנית בזיכרון; שמירה ל-DB/אחסון אובייקטים – בשלב הבא
         }
         if uf is not None:
             key = f"user_pdf_{uf.name}_{datetime.now().timestamp()}"
@@ -448,9 +436,8 @@ all_selections = selected_rows + user_added_items
 
 if all_selections:
     st.subheader("רשימת הקורסים שנבחרו")
-
     editable_df = pd.DataFrame(all_selections)
-    # סידור עמודות לתצוגה
+
     view_cols = [c for c in ["institution","year","course_code","course_name","core_area","grade","file_url","uploaded_file_key"] if c in editable_df.columns]
     if view_cols:
         editable_df = editable_df[view_cols]
@@ -471,7 +458,6 @@ if all_selections:
         },
         key="editable_df",
     )
-
     selections = editable_df.to_dict(orient="records")
 else:
     selections = []
@@ -489,11 +475,10 @@ st.divider()
 # שלב 4 – בחירת פקולטות יעד + ולידציה של התיישנות
 st.header("שלב 4 – בחירת פקולטות ובדיקת תוקף")
 cols = st.columns(3)
-chosen_faculties = []
+chosen_faculties: List[str] = []
 for i, f in enumerate(FACULTIES):
     with cols[i % 3]:
-        chk = st.checkbox(f["name"], value=False)
-        if chk:
+        if st.checkbox(f["name"], value=False):
             chosen_faculties.append(f["id"])
 
 if selections and chosen_faculties:
@@ -504,13 +489,12 @@ if selections and chosen_faculties:
             rows = []
             for s in selections:
                 y = int(s.get("year", 0) or 0)
-                fresh = course_is_fresh(y, fid, FACULTY_LOOKUP)
                 rows.append({
                     "מוסד": s.get("institution", ""),
                     "שנה": s.get("year", ""),
                     "שם הקורס": s.get("course_name", ""),
                     "תחום ליבה": s.get("core_area", ""),
-                    "בתוקף?": "כן" if fresh else "לא",
+                    "בתוקף?": "כן" if course_is_fresh(y, fid, FACULTY_LOOKUP) else "לא",
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
@@ -554,7 +538,6 @@ if consent_stats and selections:
         ))
     insert_stat_rows(rows_to_insert)
 
-# הצגה
 try:
     agg = fetch_stats_agg_df()
     if not agg.empty:
