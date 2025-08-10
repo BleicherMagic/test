@@ -1,144 +1,235 @@
-"""
-מערכת אישור קורסי ליבה – MVP ב‑Streamlit
-=================================================
-
-הערה: זהו MVP יחיד בקובץ אחד (streamlit_app.py) כדי שיהיה קל להרצה ב‑Streamlit Cloud.
-בהמשך ניתן לפרק לקבצים (utils/, config/, templates/), לחבר DB, OAuth לדוא"ל, ועוד.
-
-איך להריץ מקומית
------------------
-1) התקנה: pip install -r requirements.txt
-2) הפעלה:  streamlit run streamlit_app.py
-
-requirements.txt המינימלי:
----------------------------
-streamlit==1.37.1
-pandas==2.2.2
-openpyxl==3.1.5
-python-dateutil==2.9.0.post0
-
-פרטי MVP
----------
-- איסוף מידע אישי כללי למועמד/ת (ללא מידע מזהה לשימוש סטטיסטי)
-- בחירת מוסד/שנה וקורסי ליבה מתוך אינדקס סילבוסים לדוגמה + העלאת סילבוס מותאם אישית
-- העלאת גיליונות ציונים (אופציונלי)
-- מיפוי קורסים → דרישות ליבה (Core Areas)
-- ולידציה של "התיישנות" קורסים (10 שנים ברירת מחדל, 11 לב"ג)
-- סקירה סופית, יצוא חבילות XLSX + ZIP לפי פקולטה
-- יצירת טיוטת מייל פר‑פקולטה (העתק/הדבק; שליחה אמיתית תתווסף בהמשך)
-- לוח סטטיסטיקות מצטברות (אנונימי) בזמן ריצה
-
-קובץ זה מכיל גם "דאטה לדוגמה" (FAKE DATA) כדי לראות את הזרימה.
-
-"""
-
 import io
 import os
 import zipfile
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple, Optional
 
 import pandas as pd
 import streamlit as st
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # ==========================
-# FAKE CONFIG/DATA EXAMPLES
+# DB CONNECTION & INIT
 # ==========================
 
-# פקולטות רלוונטיות + הגדרות אימות (שדות לטבלאות, מייל יעד, שנות תוקף)
-FACULTIES = [
-    {
-        "id": "huji",
-        "name": "האוניברסיטה העברית – פקולטה לרפואה",
-        "email": "corecourses@huji.ac.il",
-        "max_course_age_years": 10,
-        "table_fields": [
-            {"id": "applicant_full_name", "label": "שם מלא"},
-            {"id": "id_or_passport", "label": "ת.ז/דרכון"},
-            {"id": "institution", "label": "מוסד לימוד"},
-            {"id": "year", "label": "שנה"},
-            {"id": "course_name", "label": "שם הקורס"},
-            {"id": "core_area", "label": "תחום ליבה"},
-            {"id": "grade", "label": "ציון"},
-        ],
-    },
-    {
-        "id": "bgu",
-        "name": "אוניברסיטת בן‑גוריון – פקולטה למדעי הבריאות",
-        "email": "corecourses@bgu.ac.il",
-        "max_course_age_years": 11,  # חריג: 11 שנים
-        "table_fields": [
-            {"id": "applicant_full_name", "label": "שם מלא"},
-            {"id": "id_or_passport", "label": "ת.ז/דרכון"},
-            {"id": "institution", "label": "מוסד לימוד"},
-            {"id": "year", "label": "שנה"},
-            {"id": "course_code", "label": "מס' קורס"},
-            {"id": "course_name", "label": "שם הקורס"},
-            {"id": "core_area", "label": "תחום ליבה"},
-            {"id": "grade", "label": "ציון"},
-        ],
-    },
-    {
-        "id": "tau",
-        "name": "אוניברסיטת תל‑אביב – הפקולטה לרפואה",
-        "email": "corecourses@tau.ac.il",
-        "max_course_age_years": 10,
-        "table_fields": [
-            {"id": "applicant_full_name", "label": "שם מלא"},
-            {"id": "id_or_passport", "label": "ת.ז/דרכון"},
-            {"id": "institution", "label": "מוסד לימוד"},
-            {"id": "year", "label": "שנה"},
-            {"id": "course_name", "label": "שם הקורס"},
-            {"id": "core_area", "label": "תחום ליבה"},
-            {"id": "grade", "label": "ציון"},
-        ],
-    },
-]
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import streamlit as st
 
-FACULTY_LOOKUP = {f["id"]: f for f in FACULTIES}
+def get_conn():
+    # 1) Try Streamlit secrets
+    if "database_url" in st.secrets:
+        db_url = st.secrets["database_url"]
+    # 2) Fallback to env var
+    else:
+        db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
 
-# 7 תחומי ליבה לדוגמה – ניתן להתאים במציאות
-CORE_AREAS = [
-    "כימיה כללית", "כימיה אורגנית", "ביוכימיה",
-    "ביולוגיה של התא", "מיקרוביולוגיה", "פיזיקה", "סטטיסטיקה"
-]
+    return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
 
-# אינדקס סילבוסים לדוגמה – בעתיד יגיע מקבצים/DB; כאן רק הדגמה.
-# במציאות ה-"file_url" יהיה קישור לקובץ סילבוס (PDF) המאוחסן ב‑Cloud (או קובץ שהועלה).
-SYLLABI_INDEX = pd.DataFrame([
-    {"institution": "מכללת הדסה", "year": 2022, "course_code": "HAD-CH101",
-     "course_name": "כימיה כללית א'", "core_area": "כימיה כללית",
-     "file_url": "https://example.com/had/2022/chem101.pdf"},
-    {"institution": "מכללת הדסה", "year": 2022, "course_code": "HAD-CH202",
-     "course_name": "כימיה אורגנית", "core_area": "כימיה אורגנית",
-     "file_url": "https://example.com/had/2022/orgchem.pdf"},
-    {"institution": "מכינת אונ' אריאל", "year": 2021, "course_code": "ARL-BIO110",
-     "course_name": "ביולוגיה של התא", "core_area": "ביולוגיה של התא",
-     "file_url": "https://example.com/ariel/2021/cellbio.pdf"},
-    {"institution": "מכינת אונ' בר‑אילן", "year": 2019, "course_code": "BIU-PHY070",
-     "course_name": "פיזיקה למכינה", "core_area": "פיזיקה", "file_url": "https://example.com/biu/2019/physics.pdf"},
-])
 
-# שמירה אנונימית בזמן ריצה לסטטיסטיקות (בדפדפן/Session בלבד במודל הדגמה)
-if "STATS" not in st.session_state:
-    st.session_state["STATS"] = []  # כל רשומה: {institution, year, core_area}
+def init_db():
+    ddl = """
+    CREATE TABLE IF NOT EXISTS faculties (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        max_course_age_years INT NOT NULL
+    );
 
+    CREATE TABLE IF NOT EXISTS faculty_table_fields (
+        faculty_id TEXT REFERENCES faculties(id) ON DELETE CASCADE,
+        field_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        position INT NOT NULL,
+        PRIMARY KEY (faculty_id, field_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS core_areas (
+        name TEXT PRIMARY KEY
+    );
+
+    CREATE TABLE IF NOT EXISTS syllabi (
+        id SERIAL PRIMARY KEY,
+        institution TEXT NOT NULL,
+        year INT NOT NULL,
+        course_code TEXT,
+        course_name TEXT NOT NULL,
+        core_area TEXT NOT NULL REFERENCES core_areas(name) ON DELETE RESTRICT,
+        file_url TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS stats (
+        id BIGSERIAL PRIMARY KEY,
+        institution TEXT,
+        year INT,
+        core_area TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(ddl)
+        conn.commit()
+
+def seed_if_empty():
+    with get_conn() as conn, conn.cursor() as cur:
+        # faculties
+        cur.execute("SELECT COUNT(*) AS c FROM faculties;")
+        if cur.fetchone()["c"] == 0:
+            cur.execute("""
+                INSERT INTO faculties (id, name, email, max_course_age_years) VALUES
+                ('huji', 'האוניברסיטה העברית – פקולטה לרפואה', 'corecourses@huji.ac.il', 10),
+                ('bgu',  'אוניברסיטת בן-גוריון – פקולטה למדעי הבריאות', 'corecourses@bgu.ac.il', 11),
+                ('tau',  'אוניברסיטת תל-אביב – הפקולטה לרפואה', 'corecourses@tau.ac.il', 10);
+            """)
+
+            # faculty_table_fields
+            fields = [
+                # HUJI
+                ("huji","applicant_full_name","שם מלא",1),
+                ("huji","id_or_passport","ת.ז/דרכון",2),
+                ("huji","institution","מוסד לימוד",3),
+                ("huji","year","שנה",4),
+                ("huji","course_name","שם הקורס",5),
+                ("huji","core_area","תחום ליבה",6),
+                ("huji","grade","ציון",7),
+                # BGU
+                ("bgu","applicant_full_name","שם מלא",1),
+                ("bgu","id_or_passport","ת.ז/דרכון",2),
+                ("bgu","institution","מוסד לימוד",3),
+                ("bgu","year","שנה",4),
+                ("bgu","course_code","מס' קורס",5),
+                ("bgu","course_name","שם הקורס",6),
+                ("bgu","core_area","תחום ליבה",7),
+                ("bgu","grade","ציון",8),
+                # TAU
+                ("tau","applicant_full_name","שם מלא",1),
+                ("tau","id_or_passport","ת.ז/דרכון",2),
+                ("tau","institution","מוסד לימוד",3),
+                ("tau","year","שנה",4),
+                ("tau","course_name","שם הקורס",5),
+                ("tau","core_area","תחום ליבה",6),
+                ("tau","grade","ציון",7),
+            ]
+            cur.executemany("""
+                INSERT INTO faculty_table_fields (faculty_id, field_id, label, position)
+                VALUES (%s, %s, %s, %s)
+            """, fields)
+
+        # core_areas
+        cur.execute("SELECT COUNT(*) AS c FROM core_areas;")
+        if cur.fetchone()["c"] == 0:
+            core_areas = [
+                ("כימיה כללית",), ("כימיה אורגנית",), ("ביוכימיה",),
+                ("ביולוגיה של התא",), ("מיקרוביולוגיה",), ("פיזיקה",), ("סטטיסטיקה",)
+            ]
+            cur.executemany("INSERT INTO core_areas (name) VALUES (%s)", core_areas)
+
+        # syllabi
+        cur.execute("SELECT COUNT(*) AS c FROM syllabi;")
+        if cur.fetchone()["c"] == 0:
+            syllabi_rows = [
+                ("מכללת הדסה", 2022, "HAD-CH101", "כימיה כללית א'", "כימיה כללית", "https://example.com/had/2022/chem101.pdf"),
+                ("מכללת הדסה", 2022, "HAD-CH202", "כימיה אורגנית", "כימיה אורגנית", "https://example.com/had/2022/orgchem.pdf"),
+                ("מכינת אונ' אריאל", 2021, "ARL-BIO110", "ביולוגיה של התא", "ביולוגיה של התא", "https://example.com/ariel/2021/cellbio.pdf"),
+                ("מכינת אונ' בר-אילן", 2019, "BIU-PHY070", "פיזיקה למכינה", "פיזיקה", "https://example.com/biu/2019/physics.pdf"),
+            ]
+            cur.executemany("""
+                INSERT INTO syllabi (institution, year, course_code, course_name, core_area, file_url)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, syllabi_rows)
+
+        conn.commit()
+
+# ==========================
+# FETCHERS
+# ==========================
+
+def fetch_faculties() -> Tuple[list, dict]:
+    """
+    מחזיר:
+      - faculties: רשימת פקולטות [{id,name,email,max_course_age_years,table_fields:[{id,label},...]}]
+      - FACULTY_LOOKUP: מילון לפי id
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM faculties ORDER BY id;")
+        facs = cur.fetchall()
+
+        cur.execute("""
+            SELECT faculty_id, field_id, label, position
+            FROM faculty_table_fields
+            ORDER BY faculty_id, position
+        """)
+        fields = cur.fetchall()
+
+    # קיבוץ השדות לכל פקולטה
+    fields_by_fac = {}
+    for f in fields:
+        fields_by_fac.setdefault(f["faculty_id"], []).append({"id": f["field_id"], "label": f["label"]})
+
+    faculties = []
+    for f in facs:
+        faculties.append({
+            "id": f["id"],
+            "name": f["name"],
+            "email": f["email"],
+            "max_course_age_years": f["max_course_age_years"],
+            "table_fields": fields_by_fac.get(f["id"], [])
+        })
+    lookup = {f["id"]: f for f in faculties}
+    return faculties, lookup
+
+def fetch_core_areas() -> list:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM core_areas ORDER BY name;")
+        return [r["name"] for r in cur.fetchall()]
+
+def fetch_syllabi_df() -> pd.DataFrame:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, institution, year, course_code, course_name, core_area, file_url
+            FROM syllabi
+            ORDER BY institution, year DESC, course_name
+        """)
+        rows = cur.fetchall()
+    return pd.DataFrame(rows)
+
+def insert_stat_rows(rows: list):
+    if not rows:
+        return
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.executemany("""
+            INSERT INTO stats (institution, year, core_area)
+            VALUES (%s, %s, %s)
+        """, rows)
+        conn.commit()
+
+def fetch_stats_agg_df() -> pd.DataFrame:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT institution, year, core_area, COUNT(*) AS count
+            FROM stats
+            GROUP BY institution, year, core_area
+            ORDER BY count DESC, institution, year, core_area
+        """)
+        rows = cur.fetchall()
+    return pd.DataFrame(rows)
 
 # ==========================
 # Utilities
 # ==========================
 
-def course_is_fresh(year: int, faculty_id: str) -> bool:
+def course_is_fresh(year: int, faculty_id: str, FACULTY_LOOKUP: dict) -> bool:
     """בודק תוקף קורס לפי שנת לימוד והכלל של הפקולטה."""
     faculty = FACULTY_LOOKUP[faculty_id]
     max_age = faculty["max_course_age_years"]
     cutoff_year = (datetime.now() - relativedelta(years=max_age)).year
     return year >= cutoff_year
 
-
 def make_faculty_table_rows(applicant, selections: List[Dict[str, Any]]):
-    """מכין רשומות לטבלת ה‑XLSX לפי הפקולטה."""
+    """מכין רשומות לטבלת ה-XLSX לפי הפקולטה."""
     rows = []
     for s in selections:
         rows.append({
@@ -153,55 +244,55 @@ def make_faculty_table_rows(applicant, selections: List[Dict[str, Any]]):
         })
     return rows
 
-
 def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_faculties: List[str],
-                            uploaded_files: Dict[str, bytes]):
+                            uploaded_files: Dict[str, bytes], FACULTY_LOOKUP: dict):
     """יוצר ZIP אחד שמכיל לכל פקולטה: טבלת XLSX + תיקיית סילבוסים + גיליונות ציונים (אם הועלו)."""
     mem_zip = io.BytesIO()
     with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for fid in chosen_faculties:
             faculty = FACULTY_LOOKUP[fid]
-            # 1) טבלת XLSX
+            # 1) טבלת XLSX – כותרות בעברית
             rows = make_faculty_table_rows(applicant, selections)
-            df = pd.DataFrame(rows, columns=[f["id"] for f in faculty["table_fields"]])
+            df = pd.DataFrame(rows)
+            cols_order = [fld["id"] for fld in faculty["table_fields"] if fld["id"] in df.columns]
+            df = df[cols_order]
+            heb_headers = {fld["id"]: fld["label"] for fld in faculty["table_fields"]}
+            df.rename(columns=heb_headers, inplace=True)
+
             xlsx_bytes = io.BytesIO()
             with pd.ExcelWriter(xlsx_bytes, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="Core Courses")
+                df.to_excel(writer, index=False, sheet_name="קורסי ליבה")
             xlsx_bytes.seek(0)
             zf.writestr(f"{fid}/core_courses_{fid}.xlsx", xlsx_bytes.read())
 
-            # 2) סילבוסים (PDF/כל קובץ שהמשתמש העלה או לינק – כאן נשמור קובץ טקסט עם הקישורים)
-            # הערה: אם הועלו PDFs אמיתיים דרך העלאת קבצים, נשמור אותם.
-            # כאן: אם selection נושא uploaded_file_key – ניקח מהuploaded_files.
+            # 2) סילבוסים: קבצים שהועלו או קישורים
             link_list = []
             for i, sel in enumerate(selections, start=1):
                 if sel.get("uploaded_file_key") and sel["uploaded_file_key"] in uploaded_files:
-                    # נשמור את הקובץ שהועלה בשם עקבי
                     zf.writestr(f"{fid}/syllabi/{i:02d}_{sel['course_name']}.pdf",
                                 uploaded_files[sel["uploaded_file_key"]])
                 elif sel.get("file_url"):
                     link_list.append(f"- {sel['course_name']}: {sel['file_url']}")
             if link_list:
-                zf.writestr(f"{fid}/syllabi/READ_ME_links.txt", "\n".join(link_list))
+                zf.writestr(f"{fid}/syllabi/קישורים_לסילבוסים.txt", "\n".join(link_list))
 
             # 3) גיליונות ציונים (אם הועלו)
             if uploaded_files.get("transcript_pdf"):
-                zf.writestr(f"{fid}/transcripts/transcript.pdf", uploaded_files["transcript_pdf"])
+                zf.writestr(f"{fid}/transcripts/גיליון_ציונים.pdf", uploaded_files["transcript_pdf"])
 
             # 4) טיוטת מייל
             email_body = (
                 f"אל: {faculty['email']}\n"
-                f"נושא: אימות קורסי ליבה – {applicant.get('full_name', '')}\n\n"
+                f"נושא: אימות קורסי ליבה – {applicant.get('full_name','')}\n\n"
                 f"שלום,\n\nמצורפת טבלת קורסי ליבה בתבנית המבוקשת + סילבוסים וגיליון ציונים (אם קיים).\n"
-                f"שם: {applicant.get('full_name', '')} | ת.ז/דרכון: {applicant.get('id_or_passport', '')}\n"
-                f"טלפון ליצירת קשר: {applicant.get('phone', '')} | דוא""ל: {applicant.get('email','')}\n\n"
-                f"בברכה,\n{applicant.get('full_name', '')}\n"
+                f"שם: {applicant.get('full_name','')} | ת.ז/דרכון: {applicant.get('id_or_passport','')}\n"
+                f"טלפון ליצירת קשר: {applicant.get('phone','')} | דוא\"ל: {applicant.get('email','')}\n\n"
+                f"בברכה,\n{applicant.get('full_name','')}\n"
             )
-            zf.writestr(f"{fid}/email_draft_{fid}.txt", email_body)
+            zf.writestr(f"{fid}/טיוטת_מייל_{fid}.txt", email_body)
 
     mem_zip.seek(0)
     return mem_zip
-
 
 # ==========================
 # UI – Streamlit App
@@ -209,63 +300,36 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
 
 st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
 
+# RTL מינימלי לכל האפליקציה + יישור טבלאות, בלי להפוך אנגלית/מספרים
 st.markdown("""
 <style>
-/* RTL כללי בלי bidi-override */
-html, body, [data-testid="stAppViewContainer"], .block-container {
-  direction: rtl;
-  text-align: right;
-}
-
-/* טפסים: שדות יקבלו אוטומטית את הכיוון לפי תו ראשון */
-input, textarea {
-  direction: rtl;
-  text-align: right;
-  unicode-bidi: plaintext;  /* אנגלית נשארת LTR, עברית RTL */
-}
-
-/* Select / Combobox של Streamlit (BaseWeb) */
-[data-baseweb="select"] {
-  direction: rtl;
-}
-[data-baseweb="select"] input {
-  unicode-bidi: plaintext;
-}
-
-/* מספרים תמיד LTR ונוחים להזנה */
-.stNumberInput input[type="number"] {
-  direction: ltr !important;
-  text-align: left !important;
-}
-
-/* טבלאות ו-DataFrame: יישור לימין, אבל בלי להפוך אנגלית/ספרות */
-[data-testid="stTable"] table,
-[data-testid="stDataFrame"] table {
-  direction: rtl;
-}
+html, body, [data-testid="stAppViewContainer"], .block-container { direction: rtl; text-align: right; }
+[data-testid="stTable"] table, [data-testid="stDataFrame"] table { direction: rtl; }
 [data-testid="stTable"] th, [data-testid="stTable"] td,
-[data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td {
-  text-align: right !important;
-  unicode-bidi: plaintext;  /* מונע “היפוך” של אנגלית/מספרים */
-}
-
-/* קוד / Pre / לינקים – תמיד LTR כדי לא להתבלגן */
-code, pre, kbd, samp, a {
-  direction: ltr;
-  text-align: left;
-  unicode-bidi: embed;
-}
-
-/* מחלקה כללית לשימוש ידני כשצריך טקסט LTR באמצע RTL */
-.ltr {
-  direction: ltr !important;
-  text-align: left !important;
-  unicode-bidi: embed !important;
-}
+[data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td { text-align: right !important; unicode-bidi: plaintext; }
+[data-baseweb="select"] { direction: rtl; }
+input, textarea { direction: rtl; text-align: right; unicode-bidi: plaintext; }
+.stNumberInput input[type="number"] { direction: ltr !important; text-align: left !important; }
+code, pre, kbd, samp, a { direction: ltr; text-align: left; unicode-bidi: embed; }
+.ltr { direction: ltr !important; text-align: left !important; unicode-bidi: embed !important; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("🧪 מערכת אישור קורסי ליבה – MVP")
+
+# --- DB init + seed (once per session) ---
+@st.cache_resource
+def ensure_db_ready():
+    init_db()
+    seed_if_empty()
+    return True
+
+ensure_db_ready()
+
+# --- Load config data from DB ---
+FACULTIES, FACULTY_LOOKUP = fetch_faculties()
+CORE_AREAS = fetch_core_areas()
+SYLLABI_INDEX = fetch_syllabi_df()
 
 with st.expander("אודות המערכת (MVP)", expanded=False):
     st.markdown(
@@ -286,13 +350,13 @@ with col2:
     email = st.text_input("דוא\"ל")
     phone = st.text_input("טלפון")
 with col3:
-    consent_stats = st.checkbox("אני מסכים\ת לשימוש אנונימי לסטטיסטיקות מצטברות", value=True)
+    consent_stats = st.checkbox("אני מסכים/ה לשימוש אנונימי לסטטיסטיקות מצטברות", value=True)
 
 applicant = {
-    "full_name": full_name.strip(),
-    "id_or_passport": id_or_passport.strip(),
-    "email": email.strip(),
-    "phone": phone.strip(),
+    "full_name": (full_name or "").strip(),
+    "id_or_passport": (id_or_passport or "").strip(),
+    "email": (email or "").strip(),
+    "phone": (phone or "").strip(),
 }
 
 st.divider()
@@ -300,9 +364,8 @@ st.divider()
 # שלב 2 – בחירת מוסד/שנה/קורסים + העלאת סילבוס מותאם אישית
 st.header("שלב 2 – בחירת קורסי ליבה והוספת סילבוסים")
 
-# בחירת מוסד → שנה → סילבוסים זמינים
-institutions = sorted(SYLLABI_INDEX["institution"].unique())
-inst = st.selectbox("בחר\י מוסד", options=["—"] + institutions)
+institutions = sorted(SYLLABI_INDEX["institution"].unique()) if not SYLLABI_INDEX.empty else []
+inst = st.selectbox("בחר/י מוסד", options=["—"] + institutions)
 year_sel = None
 selected_rows = []
 user_added_items = []  # העלאות ידניות
@@ -311,22 +374,21 @@ uploaded_files_store: Dict[str, bytes] = {}
 
 if inst != "—":
     years = sorted(SYLLABI_INDEX[SYLLABI_INDEX["institution"] == inst]["year"].unique(), reverse=True)
-    year_sel = st.selectbox("בחר\י שנה", options=years)
+    year_sel = st.selectbox("בחר/י שנה", options=years)
     inst_df = SYLLABI_INDEX[(SYLLABI_INDEX["institution"] == inst) & (SYLLABI_INDEX["year"] == year_sel)]
 
     st.subheader("סילבוסים זמינים מהמוסד והשנה שנבחרו")
-    st.dataframe(inst_df, use_container_width=True)
+    st.dataframe(inst_df.drop(columns=["id"]), use_container_width=True)
 
     choose = st.multiselect(
-        "בחר\י קורסים להוספה",
+        "בחר/י קורסים להוספה",
         options=inst_df.index.tolist(),
         format_func=lambda idx: f"{inst_df.loc[idx, 'course_name']} ({inst_df.loc[idx, 'core_area']})",
     )
 
     for idx in choose:
         row = inst_df.loc[idx].to_dict()
-        # ברירת מחדל: ללא ציון. המשתמש יוכל לערוך בהמשך.
-        row.update({"grade": ""})
+        row.update({"grade": ""})  # ברירת מחדל: ללא ציון
         selected_rows.append(row)
 
 st.markdown("**או הוספה ידנית של סילבוס/ים ממוסדות אחרים**")
@@ -343,19 +405,20 @@ with st.popover("הוספת סילבוס ידני"):
     uf = st.file_uploader("העלאת סילבוס (PDF)", type=["pdf"], accept_multiple_files=False)
     if st.button("הוסף/י לרשימה"):
         item = {
-            "institution": u_institution.strip() or "—",
+            "institution": (u_institution or "").strip() or "—",
             "year": int(u_year),
-            "course_code": u_course_code.strip(),
-            "course_name": u_course_name.strip(),
+            "course_code": (u_course_code or "").strip(),
+            "course_name": (u_course_name or "").strip(),
             "core_area": u_core_area,
-            "grade": u_grade.strip(),
+            "grade": (u_grade or "").strip(),
+            # הערה: קבצים נשמרים זמנית בזיכרון; שמירה ל-DB/אחסון אובייקטים – בשלב הבא
         }
         if uf is not None:
             key = f"user_pdf_{uf.name}_{datetime.now().timestamp()}"
             uploaded_files_store[key] = uf.getvalue()
             item["uploaded_file_key"] = key
         user_added_items.append(item)
-        st.success("נוסף לרשימה הזמנית למטה. סגרו את ה‑popover כדי לראות.")
+        st.success("נוסף לרשימה הזמנית למטה. סגרו את ה-popover כדי לראות.")
 
 # מאחדים בחירות ממדד הסילבוסים + העלאות ידניות
 all_selections = selected_rows + user_added_items
@@ -363,8 +426,12 @@ all_selections = selected_rows + user_added_items
 if all_selections:
     st.subheader("רשימת הקורסים שנבחרו")
 
-    # עריכה ידנית של פרטים (כולל הוספת ציון)
     editable_df = pd.DataFrame(all_selections)
+    # סידור עמודות לתצוגה
+    view_cols = [c for c in ["institution","year","course_code","course_name","core_area","grade","file_url","uploaded_file_key"] if c in editable_df.columns]
+    if view_cols:
+        editable_df = editable_df[view_cols]
+
     editable_df = st.data_editor(
         editable_df,
         use_container_width=True,
@@ -376,11 +443,12 @@ if all_selections:
             "course_name": st.column_config.TextColumn("שם הקורס"),
             "core_area": st.column_config.SelectboxColumn("תחום ליבה", options=CORE_AREAS),
             "grade": st.column_config.TextColumn("ציון"),
+            "file_url": st.column_config.TextColumn("קישור לסילבוס"),
+            "uploaded_file_key": st.column_config.TextColumn("מפתח קובץ (זמני)"),
         },
         key="editable_df",
     )
 
-    # שמירה חזרה למבנה רשומות
     selections = editable_df.to_dict(orient="records")
 else:
     selections = []
@@ -405,7 +473,6 @@ for i, f in enumerate(FACULTIES):
         if chk:
             chosen_faculties.append(f["id"])
 
-# בדיקת תוקף לכל פקולטה
 if selections and chosen_faculties:
     st.subheader("בדיקת התיישנות הקורסים לפי כללי כל פקולטה")
     val_tabs = st.tabs([FACULTY_LOOKUP[fid]["name"] for fid in chosen_faculties])
@@ -413,7 +480,8 @@ if selections and chosen_faculties:
         with tab:
             rows = []
             for s in selections:
-                fresh = course_is_fresh(int(s.get("year", 0) or 0), fid)
+                y = int(s.get("year", 0) or 0)
+                fresh = course_is_fresh(y, fid, FACULTY_LOOKUP)
                 rows.append({
                     "מוסד": s.get("institution", ""),
                     "שנה": s.get("year", ""),
@@ -429,16 +497,16 @@ st.divider()
 st.header("שלב 5 – סקירה ויצוא חבילות")
 
 ready_to_export = (
-        bool(applicant.get("full_name")) and
-        bool(applicant.get("id_or_passport")) and
-        bool(applicant.get("email")) and
-        selections and
-        chosen_faculties
+    bool(applicant.get("full_name")) and
+    bool(applicant.get("id_or_passport")) and
+    bool(applicant.get("email")) and
+    selections and
+    chosen_faculties
 )
 
 if ready_to_export:
     if st.button("יצירת ZIP לכל הפקולטות שנבחרו"):
-        mem_zip = export_faculty_packages(applicant, selections, chosen_faculties, uploaded_files_store)
+        mem_zip = export_faculty_packages(applicant, selections, chosen_faculties, uploaded_files_store, FACULTY_LOOKUP)
         st.download_button(
             label="הורדת הקובץ (ZIP)",
             data=mem_zip,
@@ -451,22 +519,26 @@ else:
 
 st.divider()
 
-# שלב 6 – סטטיסטיקות (אנונימיות בזמן ריצה)
-st.header("סטטיסטיקות (אנונימי, לזמן ריצה בלבד במודל ההדגמה)")
+# שלב 6 – סטטיסטיקות (אנונימיות, בבסיס הנתונים)
+st.header("סטטיסטיקות (אנונימי)")
 if consent_stats and selections:
+    rows_to_insert = []
     for s in selections:
-        st.session_state["STATS"].append({
-            "institution": s.get("institution", "—"),
-            "year": s.get("year", "—"),
-            "core_area": s.get("core_area", "—"),
-        })
+        rows_to_insert.append((
+            s.get("institution", "—"),
+            int(s.get("year", 0) or 0),
+            s.get("core_area", "—"),
+        ))
+    insert_stat_rows(rows_to_insert)
 
-if st.session_state["STATS"]:
-    stats_df = pd.DataFrame(st.session_state["STATS"])
-    agg = stats_df.value_counts(["institution", "year", "core_area"]).reset_index(name="count")
-    st.dataframe(agg, use_container_width=True)
-else:
-    st.write("טרם נאספו נתונים להצגה.")
+# הצגה
+try:
+    agg = fetch_stats_agg_df()
+    if not agg.empty:
+        st.dataframe(agg, use_container_width=True)
+    else:
+        st.write("טרם נאספו נתונים להצגה.")
+except Exception as e:
+    st.warning(f"לא ניתן להציג סטטיסטיקות כרגע: {e}")
 
-st.caption(
-    "\nMVP זה נועד להדגים את הזרימה מקצה לקצה. בשלב הבא נוסיף DB מתמשך, ניהול אדמין לאינדקס סילבוסים, ושליחה ישירה מהדוא\"ל הפרטי של המועמד/ת (OAuth).")
+st.caption("\nMVP זה נועד להדגים את הזרימה מקצה לקצה. בשלב הבא נוסיף אחסון קבצים לסילבוסים (Object Storage) ושילוב OAuth לשליחת מיילים.")
