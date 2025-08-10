@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2.pool import SimpleConnectionPool
+from contextlib import contextmanager
 
 # ==========================
 # DB CONNECTION & INIT
