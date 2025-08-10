@@ -1,12 +1,15 @@
-import io
-import os
-import zipfile
+# --- imports ---
+import io, os, zipfile
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from typing import List, Dict, Any, Tuple
-
 import pandas as pd
-import streamlit as st
+import streamlit as st  # <-- import first
+
+# ✅ MUST be the first Streamlit command:
+st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
+
+# --- the rest of your imports that don't call st.* at import time are OK ---
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
@@ -316,7 +319,6 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
 # UI – Streamlit App
 # ==========================
 
-st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
 
 # RTL + safe bidi
 st.markdown("""
