@@ -1,8 +1,10 @@
 # app.py
 import pandas as pd
 import streamlit as st
-st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
+from utils.theme import inject_dark_theme
 
+st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
+inject_dark_theme()
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from typing import List, Dict, Any
