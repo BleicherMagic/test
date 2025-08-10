@@ -211,32 +211,56 @@ st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_ico
 
 st.markdown("""
 <style>
-body, html {
-    direction: RTL;
-    unicode-bidi: bidi-override;
-    text-align: right;
+/* RTL כללי בלי bidi-override */
+html, body, [data-testid="stAppViewContainer"], .block-container {
+  direction: rtl;
+  text-align: right;
 }
-p, div, input, label, h1, h2, h3, h4, h5, h6 {
-    direction: RTL;
-    unicode-bidi: bidi-override;
-    text-align: right;
-}
-</style>
-""", unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-div[data-baseweb="select"] {
-    direction: RTL;
+/* טפסים: שדות יקבלו אוטומטית את הכיוון לפי תו ראשון */
+input, textarea {
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: plaintext;  /* אנגלית נשארת LTR, עברית RTL */
 }
-</style>
-""", unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-input {
-  unicode-bidi: bidi-override;
-  direction: RTL;
+/* Select / Combobox של Streamlit (BaseWeb) */
+[data-baseweb="select"] {
+  direction: rtl;
+}
+[data-baseweb="select"] input {
+  unicode-bidi: plaintext;
+}
+
+/* מספרים תמיד LTR ונוחים להזנה */
+.stNumberInput input[type="number"] {
+  direction: ltr !important;
+  text-align: left !important;
+}
+
+/* טבלאות ו-DataFrame: יישור לימין, אבל בלי להפוך אנגלית/ספרות */
+[data-testid="stTable"] table,
+[data-testid="stDataFrame"] table {
+  direction: rtl;
+}
+[data-testid="stTable"] th, [data-testid="stTable"] td,
+[data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td {
+  text-align: right !important;
+  unicode-bidi: plaintext;  /* מונע “היפוך” של אנגלית/מספרים */
+}
+
+/* קוד / Pre / לינקים – תמיד LTR כדי לא להתבלגן */
+code, pre, kbd, samp, a {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: embed;
+}
+
+/* מחלקה כללית לשימוש ידני כשצריך טקסט LTR באמצע RTL */
+.ltr {
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: embed !important;
 }
 </style>
 """, unsafe_allow_html=True)
