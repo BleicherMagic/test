@@ -46,14 +46,6 @@ import streamlit as st
 # FAKE CONFIG/DATA EXAMPLES
 # ==========================
 
-st.markdown("""
-<style>
-input {
-  unicode-bidi: bidi-override;
-  direction: RTL;
-}
-</style>
-""", unsafe_allow_html=True)
 
 
 # פקולטות רלוונטיות + הגדרות אימות (שדות לטבלאות, מייל יעד, שנות תוקף)
@@ -212,6 +204,16 @@ def export_faculty_packages(applicant, selections: List[Dict[str, Any]], chosen_
 # ==========================
 
 st.set_page_config(page_title="אישור קורסי ליבה – MVP", page_icon="🧪", layout="wide")
+
+st.markdown("""
+<style>
+input {
+  unicode-bidi: bidi-override;
+  direction: RTL;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 st.title("🧪 מערכת אישור קורסי ליבה – MVP")
 
